@@ -4,7 +4,8 @@ __all__ = [
     'Button',
     'SockMsg',
     'MiscOpcode',
-    'InputMode'
+    'InputMode',
+    'BulletType'
 ]
 
 class Button(IntEnum):
@@ -17,10 +18,12 @@ class Button(IntEnum):
     SHIELD = 7 #aim button, right click or left bumper
     ROT = 8 #not a button, used to set player rotation
     FORTH = 9 #not a button, used for joystick analog movement
+    PICKUP = 10 #button to pick up items
 
 class MiscOpcode(IntEnum):
     WEAPON_SET = 50 #changed weapon
     BULLET_ADD = 51 #bullet data
+    WEAPON_GET = 52 #new weapon in slot
 
 class SockMsg(IntEnum):
     ADD = 0x0 #player joined
@@ -32,3 +35,10 @@ class SockMsg(IntEnum):
 class InputMode(IntEnum):
     KEYANDMOUSE = EnumAuto()
     CONTROLLER = EnumAuto()
+
+class BulletType(IntEnum):
+    LIGHT = 0
+    SHELL = 1
+    MEDIUM = 2
+    HEAVY = 3
+    EXPLOSIVE = 4

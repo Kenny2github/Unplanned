@@ -1,0 +1,90 @@
+{
+	"ARBullet": {
+		"weight": 2,
+		"damage": 33,
+		"speed": 8,
+		"size": 4,
+		"inaccuracy": 1
+	},
+	"HARBullet": {
+		"weight": 2,
+		"damage": 48,
+		"speed": 8,
+		"size": 4,
+		"inaccuracy": 0.1
+	},
+	"MiniBullet": {
+		"weight": 0,
+		"damage": 19,
+		"speed": 8,
+		"size": 2,
+		"inaccuracy": 5
+	},
+	"Shot": {
+		"weight": 1,
+		"damage": 74,
+		"speed": 16,
+		"size": 2,
+		"inaccuracy": 4,
+		"spread": 5,
+		"amount": 12
+	},
+	"HeavyShot": {
+		"weight": 1,
+		"damage": 77,
+		"speed": 16,
+		"size": 2,
+		"inaccuracy": 2,
+		"spread": 5,
+		"amount": 6
+	},
+	"SMGBullet": {
+		"weight": 0,
+		"damage": 19,
+		"speed": 10,
+		"size": 2,
+		"inaccuracy": 4
+	},
+	"CompactBullet": {
+		"weight": 0,
+		"damage": 21,
+		"speed": 16,
+		"size": 2,
+		"inaccuracy": 2
+	},
+	"SniperBullet": {
+		"weight": 3,
+		"damage": 116,
+		"speed": 8,
+		"size": 4,
+		"inaccuracy": 0
+	},
+	"HeavySniperBullet": {
+		"weight": 3,
+		"damage": 157,
+		"speed": 8,
+		"size": 4,
+		"inaccuracy": 0
+	},
+	"Grenade": {
+		"weight": 4,
+		"damage": 110,
+		"speed": 4,
+		"size": 6,
+		"inaccuracy": 5
+	},
+	"Quad": {
+		"weight": 4,
+		"damage": 110,
+		"speed": 6,
+		"size": 4,
+		"inaccuracy": 2
+	},
+	"Rocket": {
+		"weight": 4,
+		"damage": 90,
+		"speed": 2,
+		"size": 16,
+		"inaccuracy": 0
+	}
+}

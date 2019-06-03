@@ -41,7 +41,8 @@ keys = {
     K_d: Button.RIGHT,
     K_RETURN: Button.START,
     K_SPACE: Button.FIRE,
-    K_LSHIFT: Button.SHIELD
+    K_LSHIFT: Button.SHIELD,
+    K_e: Button.PICKUP
 }
 
 pygame.event.set_blocked((ACTIVEEVENT, VIDEORESIZE, VIDEOEXPOSE, USEREVENT))
@@ -55,7 +56,7 @@ texts = {
     'controls-1': 'Controls: WASD or left joystick to move;',
     'controls-2': 'player aims towards mouse or in right joystick direction.',
     'controls-3': 'Click or right button to shoot; right click or left button to aim.',
-    'controls-4': 'Escape or select to quit. C or (X) while playing to copy game ID.',
+    'controls-4': 'Escape or select to quit. C or (B) while playing to copy game ID.',
     'start-1': 'Press 1 or (A) to start your own server,',
     'start-2': 'or 2 or (B) to join the server whose ID is in your clipboard,',
     'start-3': 'or 3 or (X) to join someone else\'s server through Discord.'
@@ -63,7 +64,7 @@ texts = {
 texts = {i: myfont.render(j, True, (255, 255, 255)) for i, j in texts.items()}
 
 def text(t, pos, y=None):
-    SCREEN.blit(texts[t], pos if y is None else (pos, y))
+    SCREEN.blit(texts.get(t, t), pos if y is None else (pos, y))
 
 if sys.platform.startswith('win32'):
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -101,6 +102,28 @@ class Player(pygame.sprite.Sprite):
     yv = 0
     direction = 0
     mdir = 0 #only for use by controller
+    ammo = [
+        300, #light
+        100, #shell
+        200, #medium
+        50, #heavy
+        20, #explosive
+    ]
+    weapon = None
+    inventory = [None, None, None, None, None] # 5 slots
+    _weaponidx = 0
+
+    @property
+    def weaponidx(self):
+        return self._weaponidx
+    @weaponidx.setter
+    def weaponidx(self, value):
+        value = value % 5
+        self._weaponidx = value
+        if self.weapon is not None:
+            self.weapon.kill()
+        self.weapon = self.inventory[value]
+        weapons.add(self.weapon)
 
     def __init__(self, pid):
         super().__init__()
@@ -113,7 +136,7 @@ class Player(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.center = (HALFWIDTH, HALFHEIGHT)
         self.sx, self.sy = self.rect.center#0, 0
-        self.weapon = AssaultRifle(self)
+        self.weapon = None
         #self.color = (
         #    random.randint(128, 255),
         #    random.randint(128, 255),
@@ -121,6 +144,15 @@ class Player(pygame.sprite.Sprite):
         #)
         self.color = (0xff, 0x6a, 0)
         self.image.fill(self.color)
+        #temp
+        self.inventory = [
+            WEAPONS['AssaultRifle'](self),
+            WEAPONS['Shotgun'](self),
+            WEAPONS['Minigun'](self),
+            WEAPONS['Sniper'](self),
+            WEAPONS['RocketLauncher'](self)
+        ]
+        self.weaponidx = 0
 
     @property
     def rectpos(self):
@@ -239,12 +271,29 @@ class Player(pygame.sprite.Sprite):
     def __repr__(self):
         return '<(pid: {})>'.format(self.id)
 
+def convert_pos(self):
+    self.rect.centerx = HALFWIDTH + (
+        self.sx - abs(player.sprite.sx)
+        // player.sprite.sx * WIDTH - HALFWIDTH
+        if abs(player.sprite.sx - HALFWIDTH) > WIDTH
+        else self.sx - player.sprite.sx
+    )
+    self.rect.centery = HALFHEIGHT + (
+        self.sy - abs(player.sprite.sy)
+        // player.sprite.sy * HEIGHT - HALFHEIGHT
+        if abs(player.sprite.sy - HALFHEIGHT) > HEIGHT
+        else self.sy - player.sprite.sy
+    )
+
 class Bullet(pygame.sprite.Sprite):
     damage = None
     speed = None
     size = None
-    area = False
     inaccuracy = 0
+
+    @property
+    def area(self):
+        return self.weight == BulletType.EXPLOSIVE
 
     def __init__(self, myplayer, direction=None):
         super().__init__()
@@ -261,34 +310,12 @@ class Bullet(pygame.sprite.Sprite):
             return
         if self.rect.width != self.size:
             self.areaframes -= 1
-            self.rect.centerx = HALFWIDTH + (
-                self.sx - abs(player.sprite.sx)
-                // player.sprite.sx * WIDTH - HALFWIDTH
-                if abs(player.sprite.sx - HALFWIDTH) > WIDTH
-                else self.sx - player.sprite.sx
-            )
-            self.rect.centery = HALFHEIGHT + (
-                self.sy - abs(player.sprite.sy)
-                // player.sprite.sy * HEIGHT - HALFHEIGHT
-                if abs(player.sprite.sy - HALFHEIGHT) > HEIGHT
-                else self.sy - player.sprite.sy
-            )
+            convert_pos(self)
             return
         for i in range(self.speed):
             self.sx += math.cos(self.direction)
             self.sy += math.sin(self.direction)
-            self.rect.centerx = HALFWIDTH + (
-                self.sx - abs(player.sprite.sx)
-                // player.sprite.sx * WIDTH - HALFWIDTH
-                if abs(player.sprite.sx - HALFWIDTH) > WIDTH
-                else self.sx - player.sprite.sx
-            )
-            self.rect.centery = HALFHEIGHT + (
-                self.sy - abs(player.sprite.sy)
-                // player.sprite.sy * HEIGHT - HALFHEIGHT
-                if abs(player.sprite.sy - HALFHEIGHT) > HEIGHT
-                else self.sy - player.sprite.sy
-            )
+            convert_pos(self)
             r = pygame.Rect(0, 0, self.size, self.size)
             r.center = (self.sx, self.sy)
             if (
@@ -326,6 +353,28 @@ class Bullet(pygame.sprite.Sprite):
         for i in pygame.sprite.spritecollide(self, players, False):
             i.health -= self.damage
 
+def looking_at_pos(rect, pos, direction):
+    if 0 < direction < math.pi / 2 \
+       or math.pi < direction < math.pi * 3 / 2:
+        #get slope of bounding lines between top right and bottom left
+        left = ((rect.y - pos[1])               # +--X
+                / (rect.x + rect.w - pos[0]))   # +--+
+        right = ((rect.y + rect.h - pos[1]) # +--+
+                 / (rect.x - pos[0]))       # X--+
+    elif math.pi / 2 < direction < math.pi \
+         or math.pi * 3 / 2 < direction < math.pi * 2:
+        #get slope of bounding lines between top left and bottom right
+        left = ((rect.y - pos[1])   # X--+
+                / (rect.x - pos[0]))# +--+
+        right = ((rect.y + rect.h - pos[1])     # +--+
+                 / (rect.x + rect.w - pos[0]))  # +--X
+    #get bounding directions from slopes
+    left = math.atan(left)
+    right = math.atan(right)
+    #if the direction is in bounds, it's looking.
+    return left <= spr.direction <= right \
+           or right <= spr.direction <= left
+
 class Weapon(pygame.sprite.Sprite):
     bullet = Bullet
     lastfire = 0
@@ -335,6 +384,7 @@ class Weapon(pygame.sprite.Sprite):
     reloading = 0
     original = None
     pivot = (0, 0)
+    name = None
 
     @staticmethod
     def img(name):
@@ -344,15 +394,45 @@ class Weapon(pygame.sprite.Sprite):
 
     def __init__(self, myplayer):
         super().__init__()
-        self.player = myplayer
-        if hasattr(self.player, 'weapon'):
-            self.player.weapon.kill()
-        self.player.weapon = self
+        if not isinstance(myplayer, Player):
+            self.sx, self.sy = myplayer
+            convert_pos(self)
+        else:
+            self.player = myplayer
+            if getattr(self.player, 'weapon', None) is not None:
+                self.player.weapon.kill()
+            self.player.weapon = self
 
     def update(self):
-        direc = -math.degrees(self.player.direction)
+        as_weapon = hasattr(self, 'player')
+        if as_weapon:
+            direc = -math.degrees(self.player.direction)
+        else:
+            direc = 0
         self.image = pygame.transform.rotate(self.original, direc)
         self.rect = self.image.get_rect()
+        if as_weapon:
+            self.update_as_weapon(direc)
+        else:
+            self.update_as_item()
+
+    def update_as_item(self):
+        convert_pos(self)
+        for spr in pygame.sprite.spritecollide(self, players, False):
+            try:
+                idx = spr.weapons.index(None)
+            except ValueError:
+                if Button.PICKUP in pressed[spr.id] \
+                   and looking_at_pos(self.rect, spr.spos, spr.direction):
+                    #do the pickup!
+                    spr.weapons[spr.weaponidx] = self #set the slot
+                    spr.weaponidx = spr.weaponidx #call the setter
+                    break
+            else:
+                spr.weapons[idx] = self
+                break
+
+    def update_as_weapon(self, direc):
         self.rect.center = self.player.rectpos \
                            + self.pivot.rotate(-direc)
         if not self.ammo > 0 and time.time() - self.reloading > self.reload:
@@ -364,7 +444,8 @@ class Weapon(pygame.sprite.Sprite):
             newfire = time.time()
             if (
                 newfire - self.lastfire >= self.delay
-                and self.ammo > 0
+                and (self.ammo > 0 or type(self).ammo <= 0)
+                and player.sprite.ammo[self.bullet.weight] > 0
             ):
                 self.lastfire = newfire
                 direction = self.player.direction
@@ -396,9 +477,11 @@ class Weapon(pygame.sprite.Sprite):
                         'op': MiscOpcode.BULLET_ADD,
                         'data': direction
                     })
-                self.ammo -= 1
-                if not self.ammo > 0:
-                    self.reloading = time.time()
+                if type(self).ammo > 0:
+                    self.ammo -= 1
+                    if not self.ammo > 0:
+                        self.reloading = time.time()
+                player.sprite.ammo[self.bullet.weight] -= 1
         if (
             Button.SHIELD in pressed[self.player.id]
             and player.sprite.id == self.player.id
@@ -431,196 +514,27 @@ class Weapon(pygame.sprite.Sprite):
                 )
             )
 
-class ARBullet(Bullet):
-    damage = 33
-    speed = 8
-    size = 4
-    inaccuracy = math.radians(1)
+### BULLETS ###
+with open('bullets.json') as f:
+    BULLETS = json.load(f)
+for i, j in BULLETS.items():
+    j['inaccuracy'] = math.radians(j['inaccuracy'])
+    if 'spread' in j:
+        j['spread'] = math.radians(j['spread'])
+    BULLETS[i] = type(i, (Bullet,), j)
 
-class HARBullet(Bullet):
-    damage = 48
-    speed = 8
-    size = 4
-    inaccuracy = math.radians(0.1)
-
-class MiniBullet(Bullet):
-    damage = 19
-    speed = 8
-    size = 2
-    inaccuracy = math.radians(5)
-
-class HeavyShot(Bullet):
-    damage = 77
-    speed = 16
-    size = 2
-    inaccuracy = math.radians(2)
-    spread = math.radians(5)
-    amount = 6
-
-class Shot(Bullet):
-    damage = 74
-    speed = 16
-    size = 2
-    inaccuracy = math.radians(4)
-    spread = math.radians(5)
-    amount = 12
-
-class CompactBullet(Bullet):
-    damage = 21
-    speed = 16
-    size = 2
-    inaccuracy = math.radians(2)
-
-class SMGBullet(Bullet):
-    damage = 19
-    speed = 10
-    size = 2
-    inaccuracy = math.radians(4)
-
-class SniperBullet(Bullet):
-    damage = 116
-    speed = 8
-    size = 4
-    inaccuracy = 0
-
-class HeavySniperBullet(Bullet):
-    damage = 157
-    speed = 8
-    size = 4
-    inaccuracy = 0
-
-class Grenade(Bullet):
-    damage = 110
-    speed = 4
-    size = 6
-    inaccuracy = math.radians(5)
-    area = True
-
-class Quad(Bullet):
-    damage = 84
-    speed = 6
-    size = 4
-    inaccuracy = math.radians(2)
-    area = True
-
-class Rocket(Bullet):
-    damage = 90
-    speed = SPEED
-    size = 16
-    inaccuracy = 0
-    area = True
-
-class AssaultRifle(Weapon):
-    bullet = ARBullet
-    delay = 1/5.5
-    ammo = 30
-    reload = 2.2
-    original = Weapon.img('ak.png')
-    pivot = pygame.math.Vector2(10, 5)
-
-class HeavyAR(AssaultRifle):
-    bullet = HARBullet
-    delay = 1/3.75
-    ammo = 25
-    reload = 2.5
-    original = Weapon.img('heavyar.png')
-    pivot = pygame.math.Vector2(8, 4)
-
-class Shotgun(Weapon):
-    bullet = Shot
-    delay = 1/1.5
-    ammo = 8
-    reload = 5.7
-    original = Weapon.img('shotgun.png')
-    pivot = pygame.math.Vector2(6, 4)
-
-class HeavyShotgun(Shotgun):
-    bullet = HeavyShot
-    delay = 1
-    ammo = 7
-    reload = 5.6
-    original = Weapon.img('heavyshotgun.png')
-    pivot = pygame.math.Vector2(8, 4)
-
-class SMG(Weapon):
-    bullet = SMGBullet
-    delay = 1/12
-    ammo = 30
-    reload = 2.2
-    original = Weapon.img('smg.png')
-    pivot = pygame.math.Vector2(6, 2)
-
-class Minigun(SMG):
-    bullet = MiniBullet
-    delay = 1/12
-    ammo = float('inf')
-    reload = 4.5
-    original = Weapon.img('minigun.png')
-    pivot = pygame.math.Vector2(8, 4)
-
-class CompactSMG(SMG):
-    bullet = CompactBullet
-    delay = 1/10
-    ammo = 40
-    reload = 3
-    original = Weapon.img('compact.png')
-    pivot = pygame.math.Vector2(6, 4)
-
-class Sniper(Weapon):
-    bullet = SniperBullet
-    delay = 3
-    ammo = 1
-    reload = 2.7
-    original = Weapon.img('sniper.png')
-    pivot = pygame.math.Vector2(8, 4)
-
-class HeavySniper(Sniper):
-    bullet = HeavySniperBullet
-    delay = 3
-    ammo = 1
-    reload = 4.1
-    original = Weapon.img('heavysniper.png')
-    pivot = pygame.math.Vector2(8, 3.5)
-
-class GrenadeLauncher(Weapon):
-    bullet = Grenade
-    delay = 1
-    ammo = 6
-    reload = 2.7
-    original = Weapon.img('grenade.png')
-    pivot = pygame.math.Vector2(6, 1)
-
-class QuadLauncher(GrenadeLauncher):
-    bullet = Quad
-    delay = 1
-    ammo = 4
-    reload = 4.5
-    original = Weapon.img('quad.png')
-    pivot = pygame.math.Vector2(8, 4)
-
-class RocketLauncher(GrenadeLauncher):
-    bullet = Rocket
-    delay = 1/0.75
-    ammo = 1
-    reload = 2.5
-    original = Weapon.img('rocket.png')
-    pivot = pygame.math.Vector2(10, 4)
-
-WEAPONS = {
-    'ar': AssaultRifle,
-    'har': HeavyAR,
-    'shot': Shotgun,
-    'hshot': HeavyShotgun,
-    'smg': SMG,
-    'mini': Minigun,
-    'csmg': CompactSMG,
-    'snip': Sniper,
-    'hsnip': HeavySniper,
-    'gl': GrenadeLauncher,
-    'ql': QuadLauncher,
-    'rl': RocketLauncher
-}
-SNOPAEW = {j.__name__: i for i, j in WEAPONS.items()}
+### WEAPONS ###
+with open('weapons.json') as f:
+    WEAPONS = json.load(f)
+for i, j in WEAPONS.items():
+    cls = j.pop('class', None)
+    j['name'] = i
+    j['original'] = Weapon.img(j['original'])
+    if isinstance(j['delay'], str):
+        j['delay'] = eval(j['delay'], {}, {})
+    j['pivot'] = pygame.math.Vector2(j['pivot'])
+    j['bullet'] = BULLETS[j['bullet']]
+    WEAPONS[i] = type(i, (WEAPONS.get(cls, Weapon),), j)
 
 player = pygame.sprite.GroupSingle()
 players = pygame.sprite.Group()
@@ -715,7 +629,7 @@ async def sockrecv(ws):
                 continue
             if deeta['op'] == MiscOpcode.WEAPON_SET:
                 if p:
-                    weapons.add(WEAPONS[deeta['data']](p))
+                    p.weaponidx = deeta['data']
                 continue
             # assume button press
             button = Button(deeta['op'])
@@ -725,6 +639,10 @@ async def sockrecv(ws):
                 pressed.get(deeta['pid'], set()).add(button)
     except asyncio.CancelledError:
         return
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return
 
 async def heartbeat(ws):
     try:
@@ -732,9 +650,9 @@ async def heartbeat(ws):
             sockmsgs.put_nowait({
                 'op': MiscOpcode.WEAPON_SET,
                 'pos': player.sprite.spos,
-                'data': SNOPAEW[type(player.sprite.weapon).__name__]
+                'data': player.sprite.weaponidx
             })
-            await asyncio.sleep(1)
+            await asyncio.sleep(1/FPS)
     except asyncio.CancelledError:
         return
 
@@ -1034,12 +952,18 @@ async def main():
                                     'op': Button.SHIELD, 'data': False,
                                     'pos': player.sprite.spos
                                 })
-                            if event.button == 4:
-                                SENSE += 0.1
-                                print(SENSE)
-                            if event.button == 5:
-                                SENSE -= 0.1
-                                print(SENSE)
+                            if event.button == 4: #scroll up
+                                sockmsgs.put_nowait({
+                                    'op': MiscOpcode.WEAPON_SET,
+                                    'pos': player.sprite.spos,
+                                    'data': player.sprite.weaponidx - 1
+                                })
+                            if event.button == 5: #scroll down
+                                sockmsgs.put_nowait({
+                                    'op': MiscOpcode.WEAPON_SET,
+                                    'pos': player.sprite.spos,
+                                    'data': player.sprite.weaponidx + 1
+                                })
                         if event.type == MOUSEBUTTONUP:
                             if event.button == 1:
                                 sockmsgs.put_nowait({
@@ -1098,7 +1022,7 @@ async def main():
                         if event.type == JOYBUTTONDOWN:
                             if event.button == 6: #select
                                 raise SystemExit
-                            if event.button == 2: #X
+                            if event.button == 1: #B
                                 pygame.scrap.put(SCRAP_TEXT, server.encode())
                             if event.button == 3: #Y
                                 newwep()
@@ -1127,6 +1051,14 @@ async def main():
                                         'op': Button.FIRE, 'data': True,
                                         'pos': player.sprite.spos
                                     })
+                        if event.type == JOYHATMOTION:
+                            if event.hat == 0: #should be the only hat
+                                sockmsgs.put_nowait({
+                                    'op': MiscOpcode.WEAPON_SET,
+                                    'pos': player.sprite.spos,
+                                    'data': player.sprite.weaponidx
+                                            + event.value[0]
+                                })
                 SCREEN.fill((0, 0, 0))
                 players.update()
                 weapons.update()
@@ -1159,7 +1091,7 @@ async def main():
                     False, (255, 0, 128)
                 ), (0, 0))
                 SCREEN.blit(myfont.render(
-                    str(players.sprites()),
+                    str(player.sprite.ammo),
                     False, (255, 0, 128)
                 ), (0, HEIGHT - texts['intro'].get_height()))
                 pygame.display.flip()
