@@ -4,6 +4,7 @@ import math
 import os
 import time
 import random
+import re
 #mid-level
 import hashlib
 import asyncio
@@ -353,28 +354,6 @@ class Bullet(pygame.sprite.Sprite):
         for i in pygame.sprite.spritecollide(self, players, False):
             i.health -= self.damage
 
-def looking_at_pos(rect, pos, direction):
-    if 0 < direction < math.pi / 2 \
-       or math.pi < direction < math.pi * 3 / 2:
-        #get slope of bounding lines between top right and bottom left
-        left = ((rect.y - pos[1])               # +--X
-                / (rect.x + rect.w - pos[0]))   # +--+
-        right = ((rect.y + rect.h - pos[1]) # +--+
-                 / (rect.x - pos[0]))       # X--+
-    elif math.pi / 2 < direction < math.pi \
-         or math.pi * 3 / 2 < direction < math.pi * 2:
-        #get slope of bounding lines between top left and bottom right
-        left = ((rect.y - pos[1])   # X--+
-                / (rect.x - pos[0]))# +--+
-        right = ((rect.y + rect.h - pos[1])     # +--+
-                 / (rect.x + rect.w - pos[0]))  # +--X
-    #get bounding directions from slopes
-    left = math.atan(left)
-    right = math.atan(right)
-    #if the direction is in bounds, it's looking.
-    return left <= spr.direction <= right \
-           or right <= spr.direction <= left
-
 class Weapon(pygame.sprite.Sprite):
     bullet = Bullet
     lastfire = 0
@@ -394,45 +373,15 @@ class Weapon(pygame.sprite.Sprite):
 
     def __init__(self, myplayer):
         super().__init__()
-        if not isinstance(myplayer, Player):
-            self.sx, self.sy = myplayer
-            convert_pos(self)
-        else:
-            self.player = myplayer
-            if getattr(self.player, 'weapon', None) is not None:
-                self.player.weapon.kill()
-            self.player.weapon = self
+        self.player = myplayer
+        if getattr(self.player, 'weapon', None) is not None:
+            self.player.weapon.kill()
+        self.player.weapon = self
 
     def update(self):
-        as_weapon = hasattr(self, 'player')
-        if as_weapon:
-            direc = -math.degrees(self.player.direction)
-        else:
-            direc = 0
+        direc = -math.degrees(self.player.direction)
         self.image = pygame.transform.rotate(self.original, direc)
         self.rect = self.image.get_rect()
-        if as_weapon:
-            self.update_as_weapon(direc)
-        else:
-            self.update_as_item()
-
-    def update_as_item(self):
-        convert_pos(self)
-        for spr in pygame.sprite.spritecollide(self, players, False):
-            try:
-                idx = spr.weapons.index(None)
-            except ValueError:
-                if Button.PICKUP in pressed[spr.id] \
-                   and looking_at_pos(self.rect, spr.spos, spr.direction):
-                    #do the pickup!
-                    spr.weapons[spr.weaponidx] = self #set the slot
-                    spr.weaponidx = spr.weaponidx #call the setter
-                    break
-            else:
-                spr.weapons[idx] = self
-                break
-
-    def update_as_weapon(self, direc):
         self.rect.center = self.player.rectpos \
                            + self.pivot.rotate(-direc)
         if not self.ammo > 0 and time.time() - self.reloading > self.reload:
@@ -495,7 +444,7 @@ class Weapon(pygame.sprite.Sprite):
             totheleft -= self.bullet.inaccuracy / 2
             pygame.draw.line(
                 SCREEN, (255, 255, 255),
-                self.rect.center,
+                self.player.rect.center,
                 (
                     self.rect.centerx
                     + WIDTH * math.cos(totheright),
@@ -505,7 +454,7 @@ class Weapon(pygame.sprite.Sprite):
             )
             pygame.draw.line(
                 SCREEN, (255, 255, 255),
-                self.rect.center,
+                self.player.rect.center,
                 (
                     self.rect.centerx
                     + WIDTH * math.cos(totheleft),
@@ -513,6 +462,134 @@ class Weapon(pygame.sprite.Sprite):
                     + WIDTH * math.sin(totheleft)
                 )
             )
+
+def weird_cross(p1, p2):
+    return p1.x * p2.y - p1.y * p2.x
+
+def intersectq(p, p2, q, q2):
+    p = pygame.math.Vector2(p)
+    p2 = pygame.math.Vector2(p2)
+    q = pygame.math.Vector2(q)
+    q2 = pygame.math.Vector2(q2)
+    r = p2 - p
+    s = q2 - q
+    numerator = weird_cross(q - p, r)
+    denominator = weird_cross(r, s)
+    if numerator == denominator == 0:
+        # collinear
+        if p == q or p == q2 or p2 == q or p2 == q2:
+            return True
+        return not all((
+            (q.x - p.x < 0) == (q.x - p2.x < 0),
+            (q.x - p.x < 0) == (q2.x - p.x < 0),
+            (q.x - p.x < 0) == (q2.x - p2.x < 0)
+        )) or not all((
+            (q.y - p.y < 0) == (q.y - p2.y < 0),
+            (q.y - p.y < 0) == (q2.y - p.y < 0),
+            (q.y - p.y < 0) == (q2.y - p2.y < 0)
+        ))
+    if denominator == 0:
+        return False
+    u = numerator / denominator
+    t = weird_cross(q - p, s) / denominator
+    return (0 <= t <= 1) and (0 <= u <= 1)
+
+def looking_at_pos(rect, pos, direction):
+    if rect.collidepoint(pos):
+        return True
+    p = pos
+    p2 = pygame.math.Vector2()
+    p2.from_polar((WIDTH, math.degrees(direction)))
+    p2 = p2 + pos
+    q = (rect.left, rect.top)
+    q2 = (rect.right, rect.bottom)
+    q3 = (rect.right, rect.top)
+    q4 = (rect.left, rect.bottom)
+    return intersectq(p, p2, q, q2) or intersectq(p, p2, q3, q4)
+
+class Loot(pygame.sprite.Sprite):
+    image = pygame.image.load('loot.png')
+
+    def __init__(self, pos, me):
+        super().__init__()
+        self.rect = self.image.get_rect()
+        me = me[:]
+        for i in range(len(me)):
+            me[i] = me[i].copy()
+        for i in me:
+            if 'distrib' in i:
+                me2 = random.choices(*zip(*i['distrib']))[0]
+                del i['distrib']
+                i.update(me2)
+        self.loot = me
+        self.sx, self.sy = pos
+        self.texts = []
+        lootlen = len(self.loot)
+        for n, i in enumerate(self.loot):
+            if i['type'] == 'weapon':
+                t = re.sub(
+                    r'([a-z](?=[A-Z])|[A-Z](?=[A-Z][a-z]))',
+                    r'\1 ', i['name']
+                )
+            elif i['type'] == 'ammo':
+                t = (
+                    BulletType(i['weight']).name.title()
+                    + ' Ammo \xd7' + str(i['amount'])
+                )
+            else:
+                t = 'Consumables'
+            if n > 0:
+                t = '& ' + t
+            self.texts.append(Text(t, 0, 0))
+
+    def update(self):
+        if not self.loot:
+            self.kill()
+            return
+        convert_pos(self)
+        if looking_at_pos(
+            self.rect, player.sprite.rect.center,
+            player.sprite.direction
+        ):
+            if self.rect.colliderect(player.sprite.rect):
+                pick_up = True
+                for i in self.loot:
+                    if i['type'] == 'weapon' \
+                       and Button.PICKUP not in pressed[player.sprite.id]:
+                        pick_up = False
+                if pick_up:
+                    for i in self.loot:
+                        if i['type'] == 'weapon':
+                            sockmsgs.put_nowait({
+                                'op': MiscOpcode.WEAPON_GET,
+                                'pos': player.sprite.spos,
+                                'data': i['name']
+                            })
+                            sockmsgs.put_nowait({
+                                'op': MiscOpcode.WEAPON_SET,
+                                'pos': player.sprite.spos,
+                                'data': player.sprite.weaponidx
+                            })
+                        if i['type'] == 'ammo':
+                            player.sprite.ammo[i['weight']] += i['amount']
+                    for i in self.texts:
+                        i.kill()
+                    self.kill()
+                    return
+            for i, j in enumerate(self.texts):
+                j.rect.x = self.rect.x + 5
+                j.rect.y = self.rect.y + j.rect.h * i + 5
+                tmptext.add(j)
+        else:
+            for i in self.texts:
+                i.kill()
+
+class Text(pygame.sprite.Sprite):
+    def __init__(self, t, pos, y=None):
+        super().__init__()
+        self.image = myfont.render(t, True, (255, 255, 255), (0, 0, 0))
+        self.rect = self.image.get_rect()
+        self.rect.x, self.rect.y = pos if y is None else (pos, y)
 
 ### BULLETS ###
 with open('bullets.json') as f:
@@ -536,10 +613,17 @@ for i, j in WEAPONS.items():
     j['bullet'] = BULLETS[j['bullet']]
     WEAPONS[i] = type(i, (WEAPONS.get(cls, Weapon),), j)
 
+with open('loot.json') as f:
+    loots = json.load(f)
+    LOOTS, LOOT_WEIGHTS = zip(*loots)
+    del loots
+
 player = pygame.sprite.GroupSingle()
 players = pygame.sprite.Group()
 weapons = pygame.sprite.Group()
 bullets = pygame.sprite.Group()
+lootses = pygame.sprite.Group()
+tmptext = pygame.sprite.Group()
 
 sockmsgs = asyncio.Queue()
 
@@ -554,9 +638,10 @@ async def rpc():
         await RPC.set_activity(**status)
 
 obstacles = None
+loot = None
 
 async def sockrecv(ws):
-    global obstacles
+    global obstacles, loot
     try:
         deeta = await ws.recv()
         deeta = json.loads(deeta)
@@ -578,6 +663,7 @@ async def sockrecv(ws):
                 with open(deeta['data']) as f:
                     raw = json.load(f)
                 obstacles = []
+                loot = raw['loot']
                 for dx, dy in {
                     (0, 0), #center center
                     (WIDTH, 0), #right center
@@ -595,13 +681,33 @@ async def sockrecv(ws):
                             HALFHEIGHT - HEIGHT // 360 * i[1] + dy,
                             WIDTH // 480 * i[2], HEIGHT // 360 * i[3]
                         )
-                        for i in raw
+                        for i in raw['obstacles']
                         if not isinstance(i, str)
                     )
+                lootses.empty()
+                loots = random.choices(LOOTS, LOOT_WEIGHTS, k=len(loot))
+                for i, pos in enumerate(loot):
+                    for dx, dy in {
+                        (0, 0), #center center
+                        (WIDTH, 0), #right center
+                        (-WIDTH, 0), #left center
+                        (0, HEIGHT), #top center
+                        (0, -HEIGHT), #bottom center
+                        (WIDTH, HEIGHT), #top right
+                        (WIDTH, -HEIGHT), #bottom right
+                        (-WIDTH, HEIGHT), #top left
+                        (-WIDTH, -HEIGHT), #bottom left
+                    }:
+                        lootses.add(Loot((
+                            pos[0] * 2 + dx + HALFWIDTH,
+                            pos[1] * 2 + dy + HALFHEIGHT
+                        ), loots[i]))
                 continue
             p = getpbyid(deeta['pid'])
             if 'pos' in deeta and deeta['pid'] != player.sprite.id:
                 p.sx, p.sy = deeta['pos']
+            if deeta['op'] == SockMsg.PNG:
+                continue
             if deeta['op'] == SockMsg.DEL:
                 if p:
                     p.kill()
@@ -631,6 +737,10 @@ async def sockrecv(ws):
                 if p:
                     p.weaponidx = deeta['data']
                 continue
+            if deeta['op'] == MiscOpcode.WEAPON_GET:
+                if p:
+                    p.inventory[p.weaponidx] = WEAPONS[deeta['data']](p)
+                continue
             # assume button press
             button = Button(deeta['op'])
             if deeta['data']:
@@ -642,19 +752,7 @@ async def sockrecv(ws):
     except Exception:
         import traceback
         traceback.print_exc()
-        return
-
-async def heartbeat(ws):
-    try:
-        while 1:
-            sockmsgs.put_nowait({
-                'op': MiscOpcode.WEAPON_SET,
-                'pos': player.sprite.spos,
-                'data': player.sprite.weaponidx
-            })
-            await asyncio.sleep(1/FPS)
-    except asyncio.CancelledError:
-        return
+        raise SystemExit
 
 async def socksend(ws):
     try:
@@ -703,15 +801,8 @@ def setdir(x, y, look=True):
         'pos': player.sprite.spos
     })
 
-def newwep():
-    sockmsgs.put_nowait({
-        'op': MiscOpcode.WEAPON_SET,
-        'data': random.choice(tuple(WEAPONS.keys())),
-        'pos': player.sprite.spos
-    })
-
 async def main():
-    global inputmode, SENSE, obstacles, RPC
+    global inputmode, SENSE, obstacles, loot, RPC
     try:
         await RPC.start()
     except (AttributeError, InvalidPipe) as exc:
@@ -816,11 +907,13 @@ async def main():
                 idx = 0
                 SCREEN.fill((0, 0, 0))
                 with open(backdrops[idx]) as f:
+                    raw = json.load(f)
                     obstacles = [pygame.Rect(
                         WIDTH // 480 * i[0] + HALFWIDTH,
                         HALFHEIGHT - HEIGHT // 360 * i[1],
                         WIDTH // 480 * i[2], HEIGHT // 360 * i[3]
-                    ) for i in json.load(f) if not isinstance(i, str)]
+                    ) for i in raw['obstacles'] if not isinstance(i, str)]
+                    loot = raw['loot']
                 for o in obstacles:
                     pygame.draw.rect(SCREEN, (255, 255, 255), o)
                 text('choose-map', 5, 5)
@@ -869,11 +962,14 @@ async def main():
                     if direction:
                         SCREEN.fill((0, 0, 0))
                         with open(backdrops[idx]) as f:
+                            raw = json.load(f)
+                            loot = raw['loot']
                             obstacles = [pygame.Rect(
                                 WIDTH // 480 * i[0] + HALFWIDTH,
                                 HALFHEIGHT - HEIGHT // 360 * i[1],
                                 WIDTH // 480 * i[2], HEIGHT // 360 * i[3]
-                            ) for i in json.load(f) if not isinstance(i, str)]
+                            ) for i in raw['obstacles']
+                                         if not isinstance(i, str)]
                         for o in obstacles:
                             pygame.draw.rect(SCREEN, (255, 255, 255), o)
                         text('choose-map', 5, 5)
@@ -919,9 +1015,6 @@ async def main():
                         if event.type == KEYDOWN:
                             if event.key == K_ESCAPE:
                                 raise SystemExit
-                            if event.key == K_TAB:
-                                newwep()
-                                continue
                             if event.key == K_c:
                                 pygame.scrap.put(SCRAP_TEXT, server.encode())
                             try:
@@ -1024,8 +1117,11 @@ async def main():
                                 raise SystemExit
                             if event.button == 1: #B
                                 pygame.scrap.put(SCRAP_TEXT, server.encode())
-                            if event.button == 3: #Y
-                                newwep()
+                            if event.button == 2: #X
+                                sockmsgs.put_nowait({
+                                    'op': Button.PICKUP, 'data': False,
+                                    'pos': player.sprite.spos
+                                })
                             if event.button == 4: #left bumper
                                 if Button.SHIELD not in ppress:
                                     sockmsgs.put_nowait({
@@ -1039,6 +1135,11 @@ async def main():
                                         'pos': player.sprite.spos
                                     })
                         if event.type == JOYBUTTONUP:
+                            if event.button == 2: #X
+                                sockmsgs.put_nowait({
+                                    'op': Button.PICKUP, 'data': True,
+                                    'pos': player.sprite.spos
+                                })
                             if event.button == 4: #left bumper
                                 if Button.SHIELD in ppress:
                                     sockmsgs.put_nowait({
@@ -1059,10 +1160,15 @@ async def main():
                                     'data': player.sprite.weaponidx
                                             + event.value[0]
                                 })
+                sockmsgs.put_nowait({
+                    'op': SockMsg.PNG,
+                    'pos': player.sprite.spos
+                })
                 SCREEN.fill((0, 0, 0))
                 players.update()
                 weapons.update()
                 bullets.update()
+                lootses.update()
                 for i in obstacles:
                     pygame.draw.rect(
                         SCREEN, (255, 255, 255),
@@ -1080,13 +1186,17 @@ async def main():
                             i[2], i[3]
                         )
                     )
+                lootses.draw(SCREEN)
                 players.draw(SCREEN)
                 weapons.draw(SCREEN)
                 bullets.draw(SCREEN)
+                tmptext.draw(SCREEN)
                 SCREEN.blit(myfont.render(
-                    'HP: {}/{}'.format(
+                    'HP: {}/{}; x: {} y: {}'.format(
                         player.sprite.health,
-                        Player.health
+                        Player.health,
+                        player.sprite.sx,
+                        player.sprite.sy
                     ),
                     False, (255, 0, 128)
                 ), (0, 0))

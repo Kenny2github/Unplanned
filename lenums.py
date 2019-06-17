@@ -8,6 +8,8 @@ __all__ = [
     'BulletType'
 ]
 
+#these are all sent as socket opcodes
+
 class Button(IntEnum):
     UP = 1 #up button on keyboard
     DOWN = 2 #down ^
@@ -29,8 +31,11 @@ class SockMsg(IntEnum):
     ADD = 0x0 #player joined
     YOU = 127 #sent once at start of connection, used to set player.sprite
     BYE = 128 #unused
+    PNG = 129 #ping message to speed things up maybe?
     BAC = 200 #set backdrop, received once at start of connection
     DEL = 255 #player left
+
+#these are used for their actual enum purpose
 
 class InputMode(IntEnum):
     KEYANDMOUSE = EnumAuto()
