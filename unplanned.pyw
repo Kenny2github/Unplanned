@@ -12,7 +12,7 @@ import json
 from glob import glob
 #3rd-party
 import websockets
-from pypresence import AioClient, Client, InvalidPipe
+from discord_party import Party
 import pygame
 from pygame.locals import *
 #me
@@ -25,7 +25,7 @@ SIZE = WIDTH, HEIGHT = 960, 720
 HALFSIZE = HALFWIDTH, HALFHEIGHT = WIDTH // 2, HEIGHT // 2
 BOUNDS = BW, BH = HALFWIDTH * 3, HALFHEIGHT * 3
 PLAYER = PW, PH = 16, 16
-SPEED = 2
+SPEED = 1
 SENSE = 0.3
 FPS = 200
 
@@ -67,27 +67,13 @@ texts = {i: myfont.render(j, True, (255, 255, 255)) for i, j in texts.items()}
 def text(t, pos, y=None):
     SCREEN.blit(texts.get(t, t), pos if y is None else (pos, y))
 
-if sys.platform.startswith('win32'):
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 LOOP = asyncio.get_event_loop()
-
-#duck-type-fix the register_event function
-async def register_event(self, event: str, func: callable, args: dict = {}):
-    if not callable(func):
-        raise TypeError
-    await self.subscribe(event, args)
-    self._events[event.lower()] = func
-
-AioClient.on_event = Client.on_event
-AioClient.register_event = register_event
-RPC = AioClient('584670770807046144', loop=LOOP,
-                pipe=sys.argv[1] if len(sys.argv) > 1 else 0)
-status = {
-    'pid': os.getpid(),
-    'large_image': 'black_hole'
-}
+PARTY = Party('584670770807046144', loop=LOOP,
+              pipe=sys.argv[1] if len(sys.argv) > 1 else 0)
+PARTY.large_image = 'black_hole'
 
 SCREEN = pygame.display.set_mode(SIZE)
+pygame.display.set_caption('Unplanned')
 if pygame.joystick.get_count():
     joy = pygame.joystick.Joystick(0)
     joy.init()
@@ -523,6 +509,11 @@ class Loot(pygame.sprite.Sprite):
                 i.update(me2)
         self.loot = me
         self.sx, self.sy = pos
+        self.gen_text()
+
+    def gen_text(self):
+        for i in getattr(self, 'texts', []):
+            i.kill()
         self.texts = []
         lootlen = len(self.loot)
         for n, i in enumerate(self.loot):
@@ -552,12 +543,13 @@ class Loot(pygame.sprite.Sprite):
             player.sprite.direction
         ):
             if self.rect.colliderect(player.sprite.rect):
-                pick_up = True
                 for i in self.loot:
-                    if i['type'] == 'weapon' \
-                       and Button.PICKUP not in pressed[player.sprite.id]:
-                        pick_up = False
-                if pick_up:
+                    if i['type'] != 'weapon':
+                        if i['type'] == 'ammo':
+                            player.sprite.ammo[i['weight']] += i['amount']
+                self.loot = [i for i in self.loot if i['type'] == 'weapon']
+                self.gen_text()
+                if Button.PICKUP in pressed[player.sprite.id]:
                     for i in self.loot:
                         if i['type'] == 'weapon':
                             sockmsgs.put_nowait({
@@ -570,8 +562,7 @@ class Loot(pygame.sprite.Sprite):
                                 'pos': player.sprite.spos,
                                 'data': player.sprite.weaponidx
                             })
-                        if i['type'] == 'ammo':
-                            player.sprite.ammo[i['weight']] += i['amount']
+                            break
                     for i in self.texts:
                         i.kill()
                     self.kill()
@@ -633,10 +624,6 @@ def getpbyid(pid):
             return p
     return None
 
-async def rpc():
-    if RPC is not None:
-        await RPC.set_activity(**status)
-
 obstacles = None
 loot = None
 
@@ -657,7 +644,8 @@ async def sockrecv(ws):
                 if deeta['pid'] != player.sprite.id:
                     players.add(Player(deeta['pid']))
                     pressed[deeta['pid']] = set()
-                status['party_size'] = [len(players), len(players) + 1]
+                PARTY.size = len(players)
+                PARTY.max = PARTY.size + 1
                 continue
             if deeta['op'] == SockMsg.BAC:
                 with open(deeta['data']) as f:
@@ -715,7 +703,8 @@ async def sockrecv(ws):
                     del pressed[deeta['pid']]
                     if deeta['pid'] == player.sprite.id:
                         raise SystemExit
-                status['party_size'] = [len(players), len(players) + 1]
+                PARTY.size = len(players)
+                PARTY.max = PARTY.size + 1
                 continue
             if deeta['op'] == Button.ROT:
                 if p:
@@ -762,14 +751,6 @@ async def socksend(ws):
     except asyncio.CancelledError:
         return
 
-async def rpcupdater():
-    try:
-        while 1:
-            await rpc()
-            await asyncio.sleep(2)
-    except asyncio.CancelledError:
-        return
-
 def setdir(x, y, look=True):
     if not (x or y):
         return
@@ -802,15 +783,11 @@ def setdir(x, y, look=True):
     })
 
 async def main():
-    global inputmode, SENSE, obstacles, loot, RPC
+    global inputmode, SENSE, obstacles, loot
+    await PARTY.start()
     try:
-        await RPC.start()
-    except (AttributeError, InvalidPipe) as exc:
-        RPC = None
-        print(type(exc).__name__, exc, sep=': ')
-    try:
-        status['state'] = 'In Intro'
-        await rpc()
+        PARTY.state = 'In Intro'
+        await PARTY.update()
         SCREEN.fill((0, 0, 0))
         text('intro', 5, 5)
         text('controls-1', 5, texts['intro'].get_height() * 1 + 5)
@@ -819,7 +796,7 @@ async def main():
         text('controls-4', 5, texts['intro'].get_height() * 4 + 5)
         text('start-1', 5, texts['intro'].get_height() * 5 + 5)
         text('start-2', 5, texts['intro'].get_height() * 6 + 5)
-        if RPC is not None:
+        if PARTY:
             text('start-3', 5, texts['intro'].get_height() * 7 + 5)
         pygame.event.set_allowed((QUIT, KEYDOWN, JOYBUTTONDOWN))
         pygame.scrap.init()
@@ -837,7 +814,7 @@ async def main():
                                  .decode().strip('\0').strip()
                         if not server:
                             server = None
-                    if event.key == K_3 and RPC is not None:
+                    if event.key == K_3 and PARTY:
                         server = ...
                 if event.type == JOYBUTTONDOWN:
                     if event.button == 0: #A
@@ -847,7 +824,7 @@ async def main():
                                  .decode().strip('\0').strip()
                         if not server:
                             server = None
-                    if event.button == 2 and RPC is not None: #X
+                    if event.button == 2 and PARTY: #X
                         server = ...
             await asyncio.sleep(1/FPS)
         SCREEN.fill((0, 0, 0))
@@ -859,41 +836,31 @@ async def main():
         pygame.display.flip()
         if server is ...:
             # Discord
-            status['state'] = 'Looking for Game'
-            await rpc()
-            fut = LOOP.create_future()
-            def handler(secret):
-                fut.set_result(secret['secret'])
-            await RPC.register_event('ACTIVITY_JOIN', handler)
-            async def waiting():
-                try:
-                    pygame.event.set_allowed(QUIT)
-                    while 1:
-                        for event in pygame.event.get(QUIT):
-                            raise SystemExit
-                        await asyncio.sleep(0.5)
-                except asyncio.CancelledError:
-                    return
-            task = LOOP.create_task(waiting())
-            server = await fut
-            task.cancel()
+            PARTY.state = 'Looking for Game'
+            await PARTY.update()
+            pygame.event.set_allowed(QUIT)
+            def meanwhile():
+                for event in pygame.event.get(QUIT):
+                    raise SystemExit
+            server = await PARTY.wait_for_player_join(meanwhile, delay=0.5)
         elif not server:
             async with websockets.connect('ws://localhost:61273') as ws:
                 server = await ws.recv()
         async with websockets.connect('ws://localhost:61273/' + server) as ws:
             recv = LOOP.create_task(sockrecv(ws))
             send = LOOP.create_task(socksend(ws))
-            rpcu = LOOP.create_task(rpcupdater())
-            status['party_id'] = hashlib.sha256(server.encode()).hexdigest()
+            PARTY.update_loop(2)
+            PARTY.id = hashlib.sha256(server.encode()).hexdigest()
             pygame.event.set_allowed(QUIT)
             while not player.sprite:
                 for event in pygame.event.get(QUIT):
                     raise SystemExit
                 await asyncio.sleep(0.5)
             if player.sprite.id == 0:
-                status['state'] = 'Choosing Arena'
-                status['party_size'] = [1, 2]
-                status['join'] = server
+                PARTY.state = 'Choosing Arena'
+                PARTY.size = 1
+                PARTY.max = 2
+                PARTY.join = server
                 pygame.event.set_allowed((
                     QUIT, KEYDOWN, JOYHATMOTION, JOYBUTTONDOWN
                 ))
@@ -980,7 +947,7 @@ async def main():
                     'data': backdrop
                 })
             else:
-                status['state'] = 'Waiting for Arena'
+                PARTY.state = 'Waiting for Arena'
                 SCREEN.fill((0, 0, 0))
                 text(
                     'waiting-for-bg',
@@ -993,8 +960,8 @@ async def main():
                     for event in pygame.event.get(QUIT):
                         raise SystemExit
                     await asyncio.sleep(0.5)
-            status['state'] = 'Playing'
-            status['start'] = round(time.time())
+            PARTY.state = 'Playing'
+            PARTY.start_time = round(time.time())
             ppress = pressed[player.sprite.id]
             pygame.event.set_allowed((
                 JOYAXISMOTION, JOYBUTTONDOWN, JOYBUTTONUP, JOYHATMOTION,
@@ -1214,12 +1181,11 @@ async def main():
         try:
             recv.cancel()
             send.cancel()
-            rpcu.cancel()
+            PARTY.stop_updating_loop()
         except NameError:
             pass
         return
 try:
     LOOP.run_until_complete(main())
 finally:
-    if RPC:
-        RPC.close()
+    PARTY.close()
